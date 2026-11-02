@@ -1,101 +1,111 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-usage() {
-  cat <<'HELP'
-Usage: ./check DATASET [RESULTS_DIR]
-       ./check DATASET --dir RESULTS_DIR
-
-Examples:
-  ./check wine
-  ./check wine results/phase3/g500_p500_f10
-  ./check wine --dir results/phase3
-
-Default results root: results/phase3 (override with NNC_RESULTS_DIR).
-Requires report_logs.py in the same directory as this script.
-HELP
-}
-if [[ ${1:-} == '-h' || ${1:-} == '--help' ]]; then usage; exit 0; fi
-if [[ $# -lt 1 || $# -gt 3 ]]; then usage >&2; exit 2; fi
+if [[ $# -lt 1 || $# -gt 3 || ${1:-} == --help ]]; then
+  echo 'Usage: ./check DATASET [RESULTS_DIR]  or  ./check DATASET --dir RESULTS_DIR'; exit 2
+fi
 dataset=$1
 root=${NNC_RESULTS_DIR:-results/phase3}
-if [[ $# -ge 2 ]]; then
-  if [[ $2 == '--dir' ]]; then
-    [[ $# -eq 3 ]] || { usage >&2; exit 2; }
-    root=$3
-  elif [[ $# -eq 2 ]]; then
-    root=$2
-  else
-    usage >&2; exit 2
-  fi
-fi
+if [[ $# -eq 2 ]]; then root=$2; fi
+if [[ $# -eq 3 ]]; then [[ $2 == --dir ]] || exit 2; root=$3; fi
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-[[ -f "$script_dir/report_logs.py" ]] || { echo "Missing: $script_dir/report_logs.py" >&2; exit 1; }
-[[ -d "$root" ]] || { echo "Results folder not found: $root" >&2; exit 1; }
+for f in report_logs.py enrich_metrics.py; do [[ -f "$script_dir/$f" ]] || { echo "Missing $script_dir/$f" >&2; exit 1; }; done
+[[ -d "$root" ]] || { echo "Missing results directory: $root" >&2; exit 1; }
+python3 - "$dataset" "$root" "$script_dir" <<'PY'
+import csv, pathlib, subprocess, sys, tempfile, os, math
 
-python3 - "$dataset" "$root" "$script_dir/report_logs.py" <<'PY'
-import csv, pathlib, subprocess, sys, tempfile
+dataset, root_arg, script_dir = sys.argv[1:]
+root = pathlib.Path(root_arg).resolve()
+sys.path.insert(0, script_dir)
+from enrich_metrics import cm_from_log, calculate
 
-dataset, root, reporter = sys.argv[1:]
-root = pathlib.Path(root)
-# Prefer enriched files; use only one file per experiment folder.
-inputs=[]
-for directory in [root] + sorted((p for p in root.rglob('*') if p.is_dir()), key=str):
-    for name in ('results_extended.tsv','results.tsv'):
-        f=directory/name
-        if f.is_file():
-            inputs.append(f)
-            break
-if not inputs:
-    sys.exit(f'No results.tsv or results_extended.tsv found under {root}')
-# Do not mix different generation/population/fold experiment folders.
-# If a parent directory was supplied, select the most recently modified experiment.
-if len(inputs)>1:
-    chosen=max(inputs,key=lambda p:p.stat().st_mtime)
-    print(f'Multiple experiment folders found ({len(inputs)}); using newest: {chosen}')
-    print('To select another experiment, pass its folder as the second argument.')
-    inputs=[chosen]
+# Prefer live results.tsv: an older results_extended.tsv may be stale.
+candidates = []
+for p in root.rglob('results.tsv'):
+    if 'checks' in p.parts or not p.is_file():
+        continue
+    candidates.append(p)
+for p in root.rglob('results_extended.tsv'):
+    if 'checks' in p.parts or not p.is_file() or (p.parent/'results.tsv').exists():
+        continue
+    candidates.append(p)
+if not candidates:
+    sys.exit(f'No results.tsv found under {root}')
 
-rows=[]
-fields=[]
-for file in inputs:
-    with file.open(newline='', encoding='utf-8-sig') as handle:
-        reader=csv.DictReader(handle, delimiter='\t')
-        if not reader.fieldnames or 'dataset' not in reader.fieldnames:
-            print(f'Ignoring invalid TSV: {file}', file=sys.stderr)
-            continue
-        matching=[r for r in reader if r.get('dataset')==dataset]
-        if matching:
-            print(f'Reading {len(matching)} rows from {file}')
-            rows.extend(matching)
-            fields.extend(x for x in reader.fieldnames if x not in fields)
-if not rows:
-    sys.exit(f'No records found for dataset {dataset!r} under {root}')
+# Choose most recent dataset-containing experiment; do not mix configurations.
+choices=[]
+for p in candidates:
+    try:
+        with p.open(newline='',encoding='utf-8-sig') as f:
+            reader=csv.DictReader(f,delimiter='\t')
+            if not reader.fieldnames or 'dataset' not in reader.fieldnames:
+                continue
+            rows=[r for r in reader if r.get('dataset')==dataset and r.get('status')=='OK' and r.get('fold') and r.get('seed') and r.get('fitness')]
+            if rows:
+                choices.append((p, list(reader.fieldnames), rows))
+    except (OSError,csv.Error):
+        continue
+if not choices:
+    sys.exit(f'No completed runs for {dataset!r} under {root}')
+selected, fields, rows=max(choices,key=lambda x:x[0].stat().st_mtime)
+if len(choices)>1:
+    print(f'Found {len(choices)} experiments with {dataset}; selected {selected}')
 
-# Keep dataset-specific reports separate from original results and from other datasets.
-out=root / 'checks' / dataset
-out.mkdir(parents=True, exist_ok=True)
-with tempfile.TemporaryDirectory(prefix='nnc_check_') as tmp:
-    filtered=pathlib.Path(tmp)/'results_filtered.tsv'
-    with filtered.open('w',newline='',encoding='utf-8') as handle:
-        writer=csv.DictWriter(handle,fieldnames=fields,delimiter='\t',extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(rows)
-    subprocess.run([sys.executable,reporter,str(filtered),'--out',str(out)],check=True)
+# Log paths in the TSV are usually relative to the project root.
+def locate_log(value):
+    if not value:
+        return None
+    path=pathlib.Path(value)
+    tries=[path,selected.parent/path,selected.parent/path.name,selected.parent/'logs'/path.name]
+    for p in tries:
+        if p.is_file():
+            return p
+    return None
 
+extra=[f'{side}_{metric}' for side in ('train','test') for metric in
+       ('macro_precision','weighted_precision','macro_recall','weighted_recall','weighted_f1')]
+fields=list(dict.fromkeys(fields+extra))
+valid=[]; missing=0
+for row in rows:
+    r=dict(row)
+    log=locate_log(r.get('log',''))
+    if log is None:
+        missing+=1
+        continue
+    try:
+        for side in ('train','test'):
+            labels, cm=cm_from_log(log,side.upper())
+            metrics,_=calculate(labels,cm)
+            for m in ('macro_precision','weighted_precision','macro_recall','weighted_recall','weighted_f1'):
+                r[f'{side}_{m}']=f'{metrics[m]:.10f}'
+    except (OSError,ValueError,IndexError):
+        missing+=1
+        continue
+    valid.append(r)
+if not valid:
+    sys.exit('No complete confusion matrices found. Check log paths.')
+
+out=root/'checks'/dataset
+out.mkdir(parents=True,exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='nnc_check_') as temp:
+    snapshot=pathlib.Path(temp)/'results_extended.tsv'
+    with snapshot.open('w',newline='',encoding='utf-8') as f:
+        w=csv.DictWriter(f,fieldnames=fields,delimiter='\t',extrasaction='ignore')
+        w.writeheader();w.writerows(valid)
+    subprocess.run([sys.executable,str(pathlib.Path(script_dir)/'report_logs.py'),str(snapshot),'--out',str(out)],check=True)
 summary=out/'report_summary.tsv'
-with summary.open(newline='',encoding='utf-8') as handle:
-    result=list(csv.DictReader(handle,delimiter='\t'))
-
-print(f'\nDataset: {dataset} | Report: {summary}')
+with summary.open(newline='',encoding='utf-8') as f:
+    report=list(csv.DictReader(f,delimiter='\t'))
+print(f'\nDataset: {dataset} | Source: {selected}')
+print(f'Completed records: {len(valid)} | Missing/incomplete logs: {missing}')
+print(f'Report: {summary}')
 metrics=['test_accuracy','test_macro_precision','test_macro_recall','test_macro_f1','test_mcc']
-print(f'{"Fitness":<18} {"Runs":>5} ' + ' '.join(f'{m.replace("test_", ""):>18}' for m in metrics))
-for r in sorted(result,key=lambda x: -float(x.get('test_macro_f1_mean') or 0)):
+print(f'{"Fitness":<18} {"Runs":>5} '+' '.join(f'{m.removeprefix("test_"):>18}' for m in metrics))
+for r in sorted(report,key=lambda x:-float(x.get('test_macro_f1_mean') or 0)):
     cells=[]
     for m in metrics:
         try:
             mean=float(r[f'{m}_mean']); std=float(r[f'{m}_std'])
-            cells.append(f'{mean:.4f}±{std:.4f}'.rjust(18))
+            cells.append((f'{mean:.4f}±{std:.4f}' if math.isfinite(mean) and math.isfinite(std) else 'n/a').rjust(18))
         except (KeyError,ValueError,TypeError):
             cells.append('n/a'.rjust(18))
     print(f'{r["fitness"]:<18} {r["n_runs"]:>5} '+' '.join(cells))
