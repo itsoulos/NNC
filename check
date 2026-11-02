@@ -99,7 +99,7 @@ print(f'\nDataset: {dataset} | Source: {selected}')
 print(f'Completed records: {len(valid)} | Missing/incomplete logs: {missing}')
 print(f'Report: {summary}')
 metrics=['test_accuracy','test_macro_precision','test_macro_recall','test_macro_f1','test_mcc']
-print(f'{"Fitness":<18} {"Runs":>5} '+' '.join(f'{m.removeprefix("test_"):>18}' for m in metrics))
+print(f'{"Fitness":<18} {"Runs":>5} '+' '.join(f'{(m[5:] if m.startswith("test_") else m):>18}' for m in metrics))
 for r in sorted(report,key=lambda x:-float(x.get('test_macro_f1_mean') or 0)):
     cells=[]
     for m in metrics:
