@@ -169,13 +169,13 @@ void	Population::calcFitnessArray()
 		for(int j=0;j<genome_size;j++) g[j]=genome[i][j];	
 			fitness_array[i]=fitness(g);	
 		if(fabs(fitness_array[i])<dmin) dmin=fabs(fitness_array[i]);
-		if(i%10==0)
+/*		if(i%10==0)
 		{
 			printf("%d:%lf ",i,dmin);
 			fflush(stdout);
-		}
+		}*/
 	}
-	printf("\n");
+//	printf("\n");
 }
 
 /* Return the current generation */

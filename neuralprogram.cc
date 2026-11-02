@@ -1,3 +1,5 @@
+# include <get_options.h>
+# include <nncneuralprogram.h>
 # include <neuralprogram.h>
 # include <math.h>
 static double dmax(double a,double b)
@@ -142,7 +144,11 @@ double	NeuralProgram::fitness(vector<int> &genome)
 			nparser[i]->makeVector(str);
 		}
 	}
-	double f=getTrainError();
+	if(kind=="neural" && fitness_metric!="sse") {
+        NNCNeuralProgram *np=dynamic_cast<NNCNeuralProgram*>(this);
+        if(np) return np->getClassificationFitness();
+    }
+    double f=getTrainError();
 	return -f;
 }
 

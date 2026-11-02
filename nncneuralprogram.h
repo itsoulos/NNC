@@ -20,6 +20,8 @@ class NNCNeuralProgram :
         NNCNeuralProgram(int Dimension,QString TrainFile,QString TestFile);
 		int	isvalidation;
 		virtual double	getTrainError();
+        double getClassificationFitness();
+        void printClassificationMetrics(vector<int> &genome, bool test);
 		virtual double  getTestError();
 		virtual void	getDeriv(Data &g);
 		double	getClassTestError(vector<int> &genome);

@@ -63,7 +63,10 @@ void run()
     double f;
     double old_test_error=0.0;
     Data bestWeights;
+    vector<int> bestGenome;
+    bool hasBest=false;
     double bestError=1e+100;
+    double bestFitness=-1e+100;
     for(int i=1;i<=max_generations;i++)
     {
             pop->nextGeneration();
@@ -71,11 +74,14 @@ void run()
             genome=pop->getBestGenome();
             str=program->printProgram(genome);
             program->fitness(genome);
-            if(fabs(f)<bestError)
+            if(fitness_metric=="sse" ? fabs(f)<bestError : f>bestFitness)
             {
                 program->neuralparser->getWeights(bestWeights);
 
                 bestError=fabs(f);
+                bestFitness=f;
+                bestGenome=genome;
+                hasBest=true;
                 old_test_error=program->getTestError();
 
             }
@@ -140,40 +146,55 @@ void run()
                     {
                         //if(abs(trial_genome[i])>255) trial_genome[i]=0;
                     }
-                    double trial_fitness=-value;
-                    pop->setGenome(trial_pos,trial_genome,trial_fitness);
-
-                    if(fabs(value)<=bestError)
-                    {
-                        bestWeights=x;
-                        bestError=fabs(value);
-                        old_test_error=program->getTestError();
-                        pop->setBest(trial_genome,trial_fitness);
-                        f=trial_fitness;
-                    }
-                    if(value<f)
-                    {
-                        bestWeights=x;
-                        bestError=fabs(value);
-                        old_test_error=program->getTestError();
-                        pop->setBest(trial_genome,trial_fitness);
-                        f=trial_fitness;
+                    double trial_fitness=program->fitness(trial_genome);
+                    // Do not replace a chromosome when local optimization worsens
+                    // the selected evolutionary fitness.
+                    vector<int> previous;
+                    pop->getGenome(trial_pos,previous);
+                    const double previous_fitness=program->fitness(previous);
+                    if(std::isfinite(trial_fitness) && trial_fitness>previous_fitness) {
+                        pop->setGenome(trial_pos,trial_genome,trial_fitness);
+                        if(!hasBest || trial_fitness>bestFitness) {
+                            bestFitness=trial_fitness;
+                            bestGenome=trial_genome;
+                            hasBest=true;
+                            program->fitness(trial_genome);
+                            program->neuralparser->getWeights(bestWeights);
+                            bestError=program->getTrainError();
+                            old_test_error=program->getTestError();
+                            pop->setBest(trial_genome,trial_fitness);
+                        }
                     }
                 }
                 pop->select();
             }
-          if(fabs(bestError)<1e-6) break;
+          if(fitness_metric=="sse" && fabs(bestError)<1e-6) break;
         }
-        program->neuralparser->setWeights(bestWeights);
-        old_test_error=program->getTestError();
+        if(hasBest) genome=bestGenome;
+        if(hasBest) program->fitness(genome);
+        const double final_fitness=hasBest ? program->fitness(genome) : -1e+8;
+        const double train_sse=program->getTrainError();
+        const double test_sse=program->getTestError();
         str=program->printProgram(genome);
-        printf("TRAIN ERROR =%.10lf\n",bestError);
-        printf("TEST  ERROR =%.10lf\n",old_test_error);
-        if(kind=="neural")
-        {
+        printf("TRAIN FITNESS = %.10lf (%s; higher is better)\n",final_fitness,fitness_metric.toStdString().c_str());
+        printf("TRAIN SSE = %.10lf\n",train_sse);
+        printf("TEST SSE = %.10lf\n",test_sse);
+        if(kind=="neural" && fitness_metric!="sse") {
             NNCNeuralProgram *p=(NNCNeuralProgram*)program;
-            double class_test=p->getClassTestError(genome);
-            printf("CLASS  ERROR=%.2lf%%\n",class_test);
+            p->printClassificationMetrics(genome,false);
+            if(fitness_metric=="macro_f1") {
+                const double check=p->getClassificationFitness();
+                printf("TRAIN FITNESS CHECK = %.10lf (difference from reported fitness: %.10g)\n",check,fabs(check-final_fitness));
+            }
+            p->printClassificationMetrics(genome,true);
+        } else if(kind=="neural") {
+            NNCNeuralProgram *p=(NNCNeuralProgram*)program;
+            p->printClassificationMetrics(genome,false);
+            if(fitness_metric=="macro_f1") {
+                const double check=p->getClassificationFitness();
+                printf("TRAIN FITNESS CHECK = %.10lf (difference from reported fitness: %.10g)\n",check,fabs(check-final_fitness));
+            }
+            p->printClassificationMetrics(genome,true);
         }
         printf("SOLUTION: y(x)=%s\n",str.c_str());
         if(output_file!="") program->printOutput(output_file);

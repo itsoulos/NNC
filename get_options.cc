@@ -1,9 +1,11 @@
 # include <unistd.h>
+# include <getopt.h>
 # include <string.h>
 # include <stdio.h>
 # include <stdlib.h>
 # include <get_options.h>
 int random_seed=1;
+QString fitness_metric="sse";
 int genome_count=500;
 int genome_length=200;
 double selection_rate=0.10;
@@ -37,13 +39,26 @@ void	print_usage()
 
 void	parse_cmd_line(int argc,char **argv)
 {
+    static struct option long_options[] = {
+        {"fitness",required_argument,0,1001}, {"help",no_argument,0,'h'}, {"train",required_argument,0,'p'},
+        {"test",required_argument,0,'t'}, {"population",required_argument,0,'c'},
+        {"genome-length",required_argument,0,'l'},
+        {"selection-rate",required_argument,0,'s'},
+        {"mutation-rate",required_argument,0,'m'}, {"seed",required_argument,0,'r'},
+        {"mode",required_argument,0,'k'}, {"output",required_argument,0,'o'},
+        {"generations",required_argument,0,'n'},
+        {"local-search-generations",required_argument,0,'g'},
+        {"local-search-chromosomes",required_argument,0,'d'},
+        {0,0,0,0}
+    };
 	int next_option;
 
 	do
 	{
-              next_option=getopt(argc,argv,short_options);
+              next_option=getopt_long(argc,argv,short_options,long_options,NULL);
 	      switch(next_option)
 	      {
+              case 1001: fitness_metric=optarg; break;
 		      case 'c':
 			      genome_count=atoi(optarg);
 			      break;

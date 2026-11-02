@@ -169,7 +169,6 @@ double	NeuralParser::eval(vector<double> xpoint)
 			arg+=xpoint[j-1]*weight[pos-1];
 		}
 		arg+=weight[(dimension+2)*i-1];
-        if(fabs(arg)>50) return 1e+100;
 		per+=weight[(dimension+2)*i-(dimension+1)-1]*sig(arg);
 	}
 	return per;

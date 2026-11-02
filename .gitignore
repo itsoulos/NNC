@@ -1,0 +1,19 @@
+
+# NNC build files
+*.o
+*.so
+*.so.*
+.qmake.stash
+moc_*
+ui_*
+NNC
+
+# Python
+__pycache__/
+*.pyc
+
+# Experimental results
+results/
+checks/
+*.log
+nohup.out

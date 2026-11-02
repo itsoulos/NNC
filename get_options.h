@@ -3,6 +3,7 @@
 # include <QString>
 extern void print_usage();
 extern int random_seed;
+extern QString fitness_metric;
 extern int genome_count;
 extern int genome_length;
 extern double selection_rate;
